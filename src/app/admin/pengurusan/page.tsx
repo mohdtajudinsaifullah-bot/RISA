@@ -106,7 +106,7 @@ export default function PengurusanKajian() {
       const result = await res.json();
       if (result.status === "success") {
         setIsModalOpen(false);
-        fetchSurveys(); // Muat semula jadual data
+        fetchSurveys(admin); // Muat semula jadual data
       } else {
         alert("Gagal menyimpan data.");
       }

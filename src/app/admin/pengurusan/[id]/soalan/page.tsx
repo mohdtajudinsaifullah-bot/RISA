@@ -18,7 +18,7 @@ export default function PengurusanSoalan() {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<any>({
     Question_ID: "",
     Survey_ID: surveyId,
     Section_Name: "Bahagian A",

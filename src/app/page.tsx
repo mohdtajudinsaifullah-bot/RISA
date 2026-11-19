@@ -48,10 +48,7 @@ export default async function Home() {
 
       {/* Bahagian Scroller (Pengumuman) */}
       <div className="bg-blue-100 text-blue-800 py-2 border-b border-blue-200 flex items-center">
-        {/* @ts-ignore - tag marquee masih disokong penuh oleh pelayar web walaupun ia tag klasik */}
-        <marquee scrollAmount="10" className="font-medium text-sm md:text-base">
-          📢 {topScroller}
-        </marquee>
+        <div dangerouslySetInnerHTML={{ __html: `<marquee scrollamount="10" class="font-medium text-sm md:text-base">📢 ${topScroller}</marquee>` }} />
       </div>
 
       <main className="flex-grow flex flex-col items-center justify-center text-center p-6 mt-10">
