@@ -1,268 +1,345 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 
 export default function JawabKajian() {
   const params = useParams();
   const router = useRouter();
-  const surveyId = params.id as string; // Ambil ID dari URL
+  const surveyId = params.id as string;
 
   const [survey, setSurvey] = useState<any>(null);
   const [questions, setQuestions] = useState<any[]>([]);
+  const [answers, setAnswers] = useState<Record<string, any>>({});
+  const [otherTexts, setOtherTexts] = useState<Record<string, string>>({});
+  
+  // State untuk Multi-step (Bahagian demi Bahagian)
+  const [currentStep, setCurrentStep] = useState(0);
+  
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
-  const [successMsg, setSuccessMsg] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
 
-  // State untuk simpan jawapan pengguna
-  const [answers, setAnswers] = useState<Record<string, any>>({});
-  const [otherInputs, setOtherInputs] = useState<Record<string, string>>({});
-
-  // 1. Tarik soalan dari Google Sheets bila laman dibuka
   useEffect(() => {
-    async function fetchData() {
+    const fetchData = async () => {
       try {
         const gasUrl = process.env.NEXT_PUBLIC_GAS_URL;
-        if (!gasUrl) throw new Error("Tiada URL API.");
-
-        const res = await fetch(`${gasUrl}?action=getAllData`);
-        if (!res.ok) throw new Error("Gagal menyambung ke pelayan.");
-
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-
-        const currentSurvey = data.surveys.find((s: any) => s.Survey_ID === surveyId);
-        if (!currentSurvey) throw new Error("Kajian tidak wujud.");
-
-        const surveyQuestions = data.questions
-          .filter((q: any) => q.Survey_ID === surveyId)
-          .sort((a: any, b: any) => a.Order_No - b.Order_No);
-
+        
+        // 1. Tarik maklumat kajian
+        const resSurvey = await fetch(`${gasUrl}?action=getSurveys`, { cache: "no-store" });
+        const surveysData = await resSurvey.json();
+        const currentSurvey = surveysData.find((s: any) => s.Survey_ID === surveyId);
         setSurvey(currentSurvey);
-        setQuestions(surveyQuestions);
-      } catch (err: any) {
-        setErrorMsg(err.message || "Ralat memuatkan data.");
+
+        // 2. Tarik senarai soalan
+        const resQ = await fetch(gasUrl!, {
+          method: "POST",
+          body: JSON.stringify({ action: "getQuestionsAdmin", Survey_ID: surveyId }),
+        });
+        const qData = await resQ.json();
+        const sortedQ = qData.sort((a: any, b: any) => Number(a.Order_No) - Number(b.Order_No));
+        setQuestions(sortedQ);
+      } catch (err) {
+        console.error("Gagal memuatkan kajian:", err);
       } finally {
         setIsLoading(false);
       }
-    }
+    };
     fetchData();
   }, [surveyId]);
 
-  // 2. Fungsi kemas kini jawapan masa pengguna menaip/memilih
-  const handleOptionChange = (questionId: string, value: string, isCheckbox: boolean = false) => {
-    if (isCheckbox) {
-      const currentAns = answers[questionId] || [];
-      if (currentAns.includes(value)) {
-        setAnswers({ ...answers, [questionId]: currentAns.filter((v: string) => v !== value) });
+  // Kumpulkan soalan mengikut Section_Name
+  const groupedSections: Record<string, any[]> = questions.reduce((acc, q) => {
+    const sec = q.Section_Name || "Bahagian Umum";
+    if (!acc[sec]) acc[sec] = [];
+    acc[sec].push(q);
+    return acc;
+  }, {} as Record<string, any[]>);
+
+  const sectionNames = Object.keys(groupedSections);
+  const totalSteps = sectionNames.length;
+  const currentSectionName = sectionNames[currentStep];
+  const currentQuestions = groupedSections[currentSectionName] || [];
+
+  // Kira peratusan Progress Bar
+  const progressPercent = totalSteps > 0 ? Math.round(((currentStep + 1) / totalSteps) * 100) : 0;
+
+  // Handle jawapan Radio & Text
+  const handleInputChange = (qId: string, value: string) => {
+    setAnswers((prev) => ({ ...prev, [qId]: value }));
+  };
+
+  // Handle jawapan Checkbox
+  const handleCheckboxChange = (qId: string, option: string, checked: boolean) => {
+    setAnswers((prev) => {
+      const currentArr = Array.isArray(prev[qId]) ? prev[qId] : [];
+      if (checked) {
+        return { ...prev, [qId]: [...currentArr, option] };
       } else {
-        setAnswers({ ...answers, [questionId]: [...currentAns, value] });
+        return { ...prev, [qId]: currentArr.filter((item: string) => item !== option) };
       }
-    } else {
-      setAnswers({ ...answers, [questionId]: value });
+    });
+  };
+
+  // Butang Seterusnya (Next)
+  const handleNext = () => {
+    if (currentStep < totalSteps - 1) {
+      setCurrentStep((prev) => prev + 1);
+      window.scrollTo({ top: 0, behavior: "smooth" });
     }
   };
 
-  // 3. Fungsi hantar (Submit) ke Google Sheets
+  // Butang Kembali (Previous)
+  const handlePrev = () => {
+    if (currentStep > 0) {
+      setCurrentStep((prev) => prev - 1);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  // Hantar semua jawapan ke Google Sheets
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
-    setErrorMsg("");
 
     try {
-      const gasUrl = process.env.NEXT_PUBLIC_GAS_URL;
-      const responseId = `RES-${Date.now()}`; 
-
-      // Format jawapan dalam satu objek untuk satu baris (horizontal)
-      let formattedAnswers: Record<string, string> = {};
-
+      // Gabungkan jawapan "Lain-lain" jika ada
+      const finalAnswers: Record<string, string> = {};
       questions.forEach((q) => {
-        let finalAnswer = answers[q.Question_ID] || "";
-        
-        // Urus jika ada jawapan "Lain-lain"
-        if (Array.isArray(finalAnswer)) {
-          if (finalAnswer.includes("Lain-lain") && otherInputs[q.Question_ID]) {
-            finalAnswer = finalAnswer.filter((v) => v !== "Lain-lain").join(", ") + ", Lain-lain: " + otherInputs[q.Question_ID];
-          } else {
-            finalAnswer = finalAnswer.join(", ");
-          }
-        } else if (finalAnswer === "Lain-lain" && otherInputs[q.Question_ID]) {
-          finalAnswer = "Lain-lain: " + otherInputs[q.Question_ID];
-        }
+        const val = answers[q.Question_ID];
+        const otherVal = otherTexts[q.Question_ID];
 
-        formattedAnswers[q.Question_ID] = finalAnswer;
+        if (Array.isArray(val)) {
+          const mapped = val.map((v) => (v === "Lain-lain" && otherVal ? `Lain-lain: ${otherVal}` : v));
+          finalAnswers[q.Question_ID] = mapped.join(", ");
+        } else if (val === "Lain-lain" && otherVal) {
+          finalAnswers[q.Question_ID] = `Lain-lain: ${otherVal}`;
+        } else {
+          finalAnswers[q.Question_ID] = val || "";
+        }
       });
 
-      // Tembak bungkusan data POST ke GAS
+      const gasUrl = process.env.NEXT_PUBLIC_GAS_URL;
       const res = await fetch(gasUrl!, {
         method: "POST",
         body: JSON.stringify({
           action: "submitResponse",
-          Response_ID: responseId,
+          Response_ID: `R${Date.now().toString().slice(-6)}`,
           Survey_ID: surveyId,
-          answers: formattedAnswers // Hantar sebagai satu set jawapan
+          answers: finalAnswers,
         }),
       });
 
       const result = await res.json();
       if (result.status === "success") {
-        setSuccessMsg(true);
+        setIsSubmitted(true);
       } else {
-        throw new Error(result.message || "Gagal menghantar jawapan.");
+        alert("Gagal menghantar jawapan. Sila cuba lagi.");
       }
-    } catch (err: any) {
-      setErrorMsg(err.message || "Terdapat ralat semasa menghantar borang.");
+    } catch (err) {
+      alert("Ralat sistem semasa menghantar jawapan.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  if (isLoading) return <div className="text-center py-20 text-gray-600 font-bold">Memuatkan borang soalan...</div>;
-  if (errorMsg && !survey) return <div className="text-center py-20 text-red-600 font-bold">Ralat: {errorMsg}</div>;
-  
-  // Asingkan soalan mengikut Bahagian (Section_Name)
-  const sections = Array.from(new Set(questions.map((q) => q.Section_Name)));
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center font-sans text-slate-500">
+        Memuatkan borang kaji selidik...
+      </div>
+    );
+  }
 
-  return (
-    <div className="min-h-screen bg-gray-50 flex flex-col font-sans">
-      <header className="bg-slate-900 text-white p-4 shadow-md">
-        <div className="max-w-4xl mx-auto flex justify-between items-center">
-          <h1 className="text-xl font-bold tracking-wider">Research Intelligence & Survey Analytics (RISA)</h1>
-          <Link href="/senarai-kajian" className="text-sm text-gray-300 hover:text-white transition">
-            &larr; Batal & Kembali
+  if (isSubmitted) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 font-sans">
+        <div className="bg-white p-10 rounded-2xl shadow-md border border-slate-200 max-w-lg w-full text-center">
+          <div className="text-5xl mb-4">✅</div>
+          <h2 className="text-2xl font-extrabold text-slate-800 mb-2">Terima Kasih!</h2>
+          <p className="text-slate-600 mb-8">Maklum balas anda telah berjaya direkodkan.</p>
+          <Link href="/" className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition">
+            Kembali ke Laman Utama
           </Link>
         </div>
-      </header>
+      </div>
+    );
+  }
 
-      <main className="flex-grow max-w-4xl mx-auto p-4 md:p-8 w-full">
-        {successMsg ? (
-          <div className="bg-white p-10 rounded-xl shadow-md text-center border-t-4 border-green-500">
-            <h2 className="text-3xl font-bold text-green-600 mb-4">Terima Kasih!</h2>
-            <p className="text-gray-700 text-lg mb-8">Maklum balas anda telah berjaya direkodkan dalam pangkalan data kami.</p>
-            <Link href="/senarai-kajian" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-lg transition">
-              Selesai
-            </Link>
-          </div>
-        ) : (
-          <>
-            <div className="bg-white p-8 rounded-xl shadow-md border border-gray-200 mb-8 border-t-4 border-blue-600">
-              <h2 className="text-3xl font-bold text-slate-800 mb-2">{survey.Title}</h2>
-              <p className="text-gray-600">{survey.Description}</p>
-            </div>
+  return (
+    <div className="min-h-screen bg-slate-100 py-8 px-4 font-sans">
+      <div className="max-w-3xl mx-auto space-y-6">
+        
+        {/* Kad Tajuk Kajian */}
+        <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-slate-200 border-t-4 border-t-blue-600">
+          <h1 className="text-2xl md:text-3xl font-extrabold text-slate-800 uppercase">
+            {survey?.Title || "Borang Kaji Selidik"}
+          </h1>
+          <p className="text-slate-600 mt-2 text-sm md:text-base">{survey?.Description}</p>
 
-            {errorMsg && (
-              <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-6">
-                <strong>Ralat: </strong> {errorMsg}
+          {/* PROGRESS BAR */}
+          {totalSteps > 0 && (
+            <div className="mt-6 pt-4 border-t border-slate-100">
+              <div className="flex justify-between items-center text-xs md:text-sm font-bold text-slate-600 mb-2">
+                <span>Bahagian {currentStep + 1} daripada {totalSteps}</span>
+                <span className="text-blue-600">{progressPercent}% Siap</span>
               </div>
-            )}
+              <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
+                <div
+                  className="bg-blue-600 h-3 rounded-full transition-all duration-500 ease-out"
+                  style={{ width: `${progressPercent}%` }}
+                ></div>
+              </div>
+            </div>
+          )}
+        </div>
 
-            <form onSubmit={handleSubmit} className="space-y-8">
-              {sections.map((sectionName, idx) => (
-                <div key={idx} className="bg-white p-6 md:p-8 rounded-xl shadow-sm border border-gray-200">
-                  <h3 className="text-xl font-extrabold text-slate-800 mb-6 border-b-2 border-slate-100 pb-2">
-                    {sectionName}
-                  </h3>
-                  
-                  <div className="space-y-6">
-                    {questions.filter((q) => q.Section_Name === sectionName).map((q) => {
-                      // Semak jika soalan ada pilihan 'Lain-lain'
-                      const optionsArray = q.Options ? String(q.Options).split(",").map((o) => o.trim()) : [];
-                      if (String(q.Has_Other_Option).toUpperCase() === "TRUE" && !optionsArray.includes("Lain-lain")) {
-                        optionsArray.push("Lain-lain");
-                      }
-                      
-                      const isOtherSelected = q.Question_Type === "checkbox" 
-                        ? (answers[q.Question_ID] || []).includes("Lain-lain")
-                        : answers[q.Question_ID] === "Lain-lain";
+        {/* Borang Soalan (Hanya Papar Bahagian Semasa) */}
+        <form onSubmit={handleSubmit}>
+          <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-slate-200 space-y-6">
+            <h2 className="text-xl font-bold text-slate-800 pb-3 border-b border-slate-200">
+              {currentSectionName}
+            </h2>
 
-                      return (
-                        <div key={q.Question_ID} className="p-4 bg-slate-50 rounded-lg border border-slate-100">
-                          <label className="block text-gray-800 font-semibold mb-3">
-                            {q.Order_No}. {q.Question_Text}
-                          </label>
+            {currentQuestions.map((q) => {
+              const optionsList = q.Options ? q.Options.split(",").map((opt: string) => opt.trim()).filter(Boolean) : [];
+              const hasOther = String(q.Has_Other_Option).toUpperCase() === "TRUE";
+              const isOtherSelected =
+                q.Question_Type === "radio"
+                  ? answers[q.Question_ID] === "Lain-lain"
+                  : Array.isArray(answers[q.Question_ID]) && answers[q.Question_ID].includes("Lain-lain");
 
-                          {/* 1. TEXT INPUT */}
-                          {q.Question_Type.toLowerCase() === "text" && (
-                            <input
-                              type="text"
-                              required
-                              className="w-full border border-gray-300 rounded p-3 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                              onChange={(e) => handleOptionChange(q.Question_ID, e.target.value)}
-                            />
-                          )}
+              return (
+                <div key={q.Question_ID} className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                  <label className="block font-bold text-slate-800 mb-3 text-sm md:text-base">
+                    {q.Order_No}. {q.Question_Text}
+                  </label>
 
-                          {/* 2. RADIO BUTTON (Pilihan Tunggal) */}
-                          {q.Question_Type.toLowerCase() === "radio" && (
-                            <div className="space-y-2 mt-2">
-                              {optionsArray.map((opt, i) => (
-                                <label key={i} className="flex items-center space-x-3 cursor-pointer">
-                                  <input
-                                    type="radio"
-                                    name={q.Question_ID}
-                                    value={opt}
-                                    required
-                                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
-                                    onChange={(e) => handleOptionChange(q.Question_ID, e.target.value)}
-                                  />
-                                  <span className="text-gray-700">{opt}</span>
-                                </label>
-                              ))}
-                            </div>
-                          )}
+                  {/* Jenis: TEXT */}
+                  {q.Question_Type === "text" && (
+                    <input
+                      type="text"
+                      className="w-full border border-slate-300 rounded-lg p-3 bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                      placeholder="Taip jawapan anda di sini..."
+                      value={answers[q.Question_ID] || ""}
+                      onChange={(e) => handleInputChange(q.Question_ID, e.target.value)}
+                    />
+                  )}
 
-                          {/* 3. CHECKBOX (Pelbagai Pilihan) */}
-                          {q.Question_Type.toLowerCase() === "checkbox" && (
-                            <div className="space-y-2 mt-2">
-                              {optionsArray.map((opt, i) => (
-                                <label key={i} className="flex items-center space-x-3 cursor-pointer">
-                                  <input
-                                    type="checkbox"
-                                    value={opt}
-                                    className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                                    onChange={(e) => handleOptionChange(q.Question_ID, e.target.value, true)}
-                                  />
-                                  <span className="text-gray-700">{opt}</span>
-                                </label>
-                              ))}
-                            </div>
-                          )}
+                  {/* Jenis: RADIO */}
+                  {q.Question_Type === "radio" && (
+                    <div className="space-y-2.5">
+                      {optionsList.map((opt: string, idx: number) => (
+                        <label key={idx} className="flex items-center space-x-3 cursor-pointer text-slate-700 hover:text-slate-900">
+                          <input
+                            type="radio"
+                            name={q.Question_ID}
+                            value={opt}
+                            checked={answers[q.Question_ID] === opt}
+                            onChange={(e) => handleInputChange(q.Question_ID, e.target.value)}
+                            className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm md:text-base">{opt}</span>
+                        </label>
+                      ))}
+                      {hasOther && (
+                        <label className="flex items-center space-x-3 cursor-pointer text-slate-700">
+                          <input
+                            type="radio"
+                            name={q.Question_ID}
+                            value="Lain-lain"
+                            checked={answers[q.Question_ID] === "Lain-lain"}
+                            onChange={(e) => handleInputChange(q.Question_ID, e.target.value)}
+                            className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm md:text-base">Lain-lain</span>
+                        </label>
+                      )}
+                    </div>
+                  )}
 
-                          {/* KOTAK TEKS LAIN-LAIN (Muncul jika Lain-lain dipilih) */}
-                          {isOtherSelected && (
-                            <div className="mt-3 ml-7">
-                              <input
-                                type="text"
-                                placeholder="Sila nyatakan..."
-                                required
-                                className="w-full border border-gray-300 rounded p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                                onChange={(e) => setOtherInputs({ ...otherInputs, [q.Question_ID]: e.target.value })}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                  {/* Jenis: CHECKBOX */}
+                  {q.Question_Type === "checkbox" && (
+                    <div className="space-y-2.5">
+                      {optionsList.map((opt: string, idx: number) => (
+                        <label key={idx} className="flex items-center space-x-3 cursor-pointer text-slate-700 hover:text-slate-900">
+                          <input
+                            type="checkbox"
+                            value={opt}
+                            checked={Array.isArray(answers[q.Question_ID]) && answers[q.Question_ID].includes(opt)}
+                            onChange={(e) => handleCheckboxChange(q.Question_ID, opt, e.target.checked)}
+                            className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                          />
+                          <span className="text-sm md:text-base">{opt}</span>
+                        </label>
+                      ))}
+                      {hasOther && (
+                        <label className="flex items-center space-x-3 cursor-pointer text-slate-700">
+                          <input
+                            type="checkbox"
+                            value="Lain-lain"
+                            checked={Array.isArray(answers[q.Question_ID]) && answers[q.Question_ID].includes("Lain-lain")}
+                            onChange={(e) => handleCheckboxChange(q.Question_ID, "Lain-lain", e.target.checked)}
+                            className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                          />
+                          <span className="text-sm md:text-base">Lain-lain</span>
+                        </label>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Kotak Teks Automatik jika pilih 'Lain-lain' */}
+                  {isOtherSelected && (
+                    <input
+                      type="text"
+                      className="mt-3 w-full border border-blue-300 rounded-lg p-2.5 bg-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      placeholder="Sila nyatakan..."
+                      value={otherTexts[q.Question_ID] || ""}
+                      onChange={(e) => setOtherTexts((prev) => ({ ...prev, [q.Question_ID]: e.target.value }))}
+                    />
+                  )}
                 </div>
-              ))}
+              );
+            })}
 
-              <div className="flex justify-end pt-4">
+            {/* Butang Navigasi (Kembali / Seterusnya / Hantar) */}
+            <div className="flex justify-between items-center pt-6 border-t border-slate-200">
+              {currentStep > 0 ? (
+                <button
+                  type="button"
+                  onClick={handlePrev}
+                  className="px-6 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold rounded-lg transition"
+                >
+                  &larr; Kembali
+                </button>
+              ) : (
+                <div></div>
+              )}
+
+              {currentStep < totalSteps - 1 ? (
+                <button
+                  type="button"
+                  onClick={handleNext}
+                  className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow transition"
+                >
+                  Seterusnya &rarr;
+                </button>
+              ) : (
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className={`py-3 px-10 rounded-lg text-white font-bold text-lg shadow-lg transition ${
-                    isSubmitting ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
+                  className={`px-8 py-2.5 text-white font-bold rounded-lg shadow-md transition ${
+                    isSubmitting ? "bg-green-400" : "bg-green-600 hover:bg-green-700"
                   }`}
                 >
-                  {isSubmitting ? "Menghantar..." : "Hantar Jawapan"}
+                  {isSubmitting ? "Menghantar..." : "Hantar Jawapan ✓"}
                 </button>
-              </div>
-            </form>
-          </>
-        )}
-      </main>
+              )}
+            </div>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
