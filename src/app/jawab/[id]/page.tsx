@@ -145,14 +145,15 @@ export default function JawabKajian() {
       questions.forEach((q) => {
         const val = answers[q.Question_ID];
         const otherVal = otherTexts[q.Question_ID];
+        const colKey = `Q${q.Order_No}`;
 
         if (Array.isArray(val)) {
           const mapped = val.map((v) => (v === "Lain-lain" && otherVal ? `Lain-lain: ${otherVal}` : v));
-          finalAnswers[q.Question_ID] = mapped.join(", ");
+          finalAnswers[colKey] = mapped.join(", ");
         } else if (val === "Lain-lain" && otherVal) {
-          finalAnswers[q.Question_ID] = `Lain-lain: ${otherVal}`;
+          finalAnswers[colKey] = `Lain-lain: ${otherVal}`;
         } else {
-          finalAnswers[q.Question_ID] = val || "";
+          finalAnswers[colKey] = val || "";
         }
       });
 
