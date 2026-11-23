@@ -1,22 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 
 export default function JawabKajian() {
   const params = useParams();
-  const router = useRouter();
   const surveyId = params.id as string;
 
   const [survey, setSurvey] = useState<any>(null);
   const [questions, setQuestions] = useState<any[]>([]);
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const [otherTexts, setOtherTexts] = useState<Record<string, string>>({});
-  
-  // State untuk Multi-step (Bahagian demi Bahagian)
+
+  // State untuk Multi-step & Amaran
   const [currentStep, setCurrentStep] = useState(0);
-  
+  const [errorMsg, setErrorMsg] = useState("");
+
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
@@ -25,7 +25,7 @@ export default function JawabKajian() {
     const fetchData = async () => {
       try {
         const gasUrl = process.env.NEXT_PUBLIC_GAS_URL;
-        
+
         // 1. Tarik maklumat kajian
         const resSurvey = await fetch(`${gasUrl}?action=getSurveys`, { cache: "no-store" });
         const surveysData = await resSurvey.json();
@@ -62,16 +62,33 @@ export default function JawabKajian() {
   const currentSectionName = sectionNames[currentStep];
   const currentQuestions = groupedSections[currentSectionName] || [];
 
-  // Kira peratusan Progress Bar
-  const progressPercent = totalSteps > 0 ? Math.round(((currentStep + 1) / totalSteps) * 100) : 0;
+  // Semak sama ada satu-satu soalan sudah dijawab
+  const isQuestionAnswered = (q: any) => {
+    const val = answers[q.Question_ID];
+    if (q.Question_Type === "checkbox") {
+      if (!Array.isArray(val) || val.length === 0) return false;
+      if (val.includes("Lain-lain") && !(otherTexts[q.Question_ID] || "").trim()) return false;
+      return true;
+    } else {
+      if (!val || String(val).trim() === "") return false;
+      if (val === "Lain-lain" && !(otherTexts[q.Question_ID] || "").trim()) return false;
+      return true;
+    }
+  };
+
+  // Kira Progress Bar ikut JUMLAH SOALAN DIJAWAB (Mula dari 0%)
+  const answeredCount = questions.filter((q) => isQuestionAnswered(q)).length;
+  const progressPercent = questions.length > 0 ? Math.round((answeredCount / questions.length) * 100) : 0;
 
   // Handle jawapan Radio & Text
   const handleInputChange = (qId: string, value: string) => {
+    setErrorMsg("");
     setAnswers((prev) => ({ ...prev, [qId]: value }));
   };
 
   // Handle jawapan Checkbox
   const handleCheckboxChange = (qId: string, option: string, checked: boolean) => {
+    setErrorMsg("");
     setAnswers((prev) => {
       const currentArr = Array.isArray(prev[qId]) ? prev[qId] : [];
       if (checked) {
@@ -82,8 +99,23 @@ export default function JawabKajian() {
     });
   };
 
+  // Semak semua soalan dalam bahagian semasa sebelum ke bahagian seterusnya
+  const validateCurrentSection = () => {
+    for (const q of currentQuestions) {
+      if (!isQuestionAnswered(q)) {
+        setErrorMsg(`Sila lengkapkan Soalan ${q.Order_No} sebelum meneruskan.`);
+        return false;
+      }
+    }
+    setErrorMsg("");
+    return true;
+  };
+
   // Butang Seterusnya (Next)
-  const handleNext = () => {
+  const handleNext = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault(); // Elak daripada ter-submit borang secara tidak sengaja
+    if (!validateCurrentSection()) return;
+
     if (currentStep < totalSteps - 1) {
       setCurrentStep((prev) => prev + 1);
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -91,7 +123,9 @@ export default function JawabKajian() {
   };
 
   // Butang Kembali (Previous)
-  const handlePrev = () => {
+  const handlePrev = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    setErrorMsg("");
     if (currentStep > 0) {
       setCurrentStep((prev) => prev - 1);
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -101,6 +135,8 @@ export default function JawabKajian() {
   // Hantar semua jawapan ke Google Sheets
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!validateCurrentSection()) return;
+
     setIsSubmitting(true);
 
     try {
@@ -178,16 +214,18 @@ export default function JawabKajian() {
           </h1>
           <p className="text-slate-600 mt-2 text-sm md:text-base">{survey?.Description}</p>
 
-          {/* PROGRESS BAR */}
-          {totalSteps > 0 && (
+          {/* PROGRESS BAR IKUT JUMLAH SOALAN DIJAWAB */}
+          {questions.length > 0 && (
             <div className="mt-6 pt-4 border-t border-slate-100">
               <div className="flex justify-between items-center text-xs md:text-sm font-bold text-slate-600 mb-2">
-                <span>Bahagian {currentStep + 1} daripada {totalSteps}</span>
+                <span>
+                  Bahagian {currentStep + 1} daripada {totalSteps} ({answeredCount}/{questions.length} soalan dijawab)
+                </span>
                 <span className="text-blue-600">{progressPercent}% Siap</span>
               </div>
               <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
                 <div
-                  className="bg-blue-600 h-3 rounded-full transition-all duration-500 ease-out"
+                  className="bg-blue-600 h-3 rounded-full transition-all duration-300 ease-out"
                   style={{ width: `${progressPercent}%` }}
                 ></div>
               </div>
@@ -213,7 +251,7 @@ export default function JawabKajian() {
               return (
                 <div key={q.Question_ID} className="bg-slate-50 p-5 rounded-xl border border-slate-200">
                   <label className="block font-bold text-slate-800 mb-3 text-sm md:text-base">
-                    {q.Order_No}. {q.Question_Text}
+                    {q.Order_No}. {q.Question_Text} <span className="text-red-500">*</span>
                   </label>
 
                   {/* Jenis: TEXT */}
@@ -296,17 +334,28 @@ export default function JawabKajian() {
                       className="mt-3 w-full border border-blue-300 rounded-lg p-2.5 bg-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                       placeholder="Sila nyatakan..."
                       value={otherTexts[q.Question_ID] || ""}
-                      onChange={(e) => setOtherTexts((prev) => ({ ...prev, [q.Question_ID]: e.target.value }))}
+                      onChange={(e) => {
+                        setErrorMsg("");
+                        setOtherTexts((prev) => ({ ...prev, [q.Question_ID]: e.target.value }));
+                      }}
                     />
                   )}
                 </div>
               );
             })}
 
+            {/* Mesej Amaran jika ada soalan belum dijawab */}
+            {errorMsg && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm font-semibold">
+                ⚠️ {errorMsg}
+              </div>
+            )}
+
             {/* Butang Navigasi (Kembali / Seterusnya / Hantar) */}
             <div className="flex justify-between items-center pt-6 border-t border-slate-200">
               {currentStep > 0 ? (
                 <button
+                  key="btn-prev"
                   type="button"
                   onClick={handlePrev}
                   className="px-6 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold rounded-lg transition"
@@ -319,6 +368,7 @@ export default function JawabKajian() {
 
               {currentStep < totalSteps - 1 ? (
                 <button
+                  key="btn-next"
                   type="button"
                   onClick={handleNext}
                   className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow transition"
@@ -327,6 +377,7 @@ export default function JawabKajian() {
                 </button>
               ) : (
                 <button
+                  key="btn-submit"
                   type="submit"
                   disabled={isSubmitting}
                   className={`px-8 py-2.5 text-white font-bold rounded-lg shadow-md transition ${
