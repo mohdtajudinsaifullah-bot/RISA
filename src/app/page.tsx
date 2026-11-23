@@ -47,8 +47,23 @@ export default async function Home() {
       </header>
 
       {/* Bahagian Scroller (Pengumuman) */}
-      <div className="bg-blue-100 text-blue-800 py-2 border-b border-blue-200 flex items-center w-full overflow-hidden">
-        <div className="w-full" dangerouslySetInnerHTML={{ __html: `<marquee scrollamount="10" class="font-medium text-sm md:text-base w-full">📢 ${topScroller}</marquee>` }} />
+      {/* Bahagian Scroller (Pengumuman) */}
+      <div className="bg-blue-100 text-blue-800 border-b border-blue-200 flex items-center w-full overflow-hidden">
+        {/* Ikon Speaker Tetap di Kiri dengan Animasi Berbunyi */}
+        <div className="bg-blue-200 px-4 py-2 flex items-center justify-center z-10 shadow-sm shrink-0">
+          <div className="relative flex items-center justify-center">
+            <span className="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-blue-400 opacity-75"></span>
+            <span className="relative text-lg animate-pulse">📢</span>
+          </div>
+        </div>
+
+        {/* Teks Pengumuman Sahaja yang Bergerak */}
+        <div
+          className="w-full py-2 overflow-hidden"
+          dangerouslySetInnerHTML={{
+            __html: `<marquee scrollamount="10" class="font-medium text-sm md:text-base w-full block">${topScroller}</marquee>`,
+          }}
+        />
       </div>
 
       <main className="flex-grow flex flex-col items-center justify-center text-center p-6 mt-10">
