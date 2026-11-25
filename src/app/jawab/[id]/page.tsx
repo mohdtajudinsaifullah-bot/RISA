@@ -213,7 +213,9 @@ export default function JawabKajian() {
           <h1 className="text-2xl md:text-3xl font-extrabold text-slate-800 uppercase">
             {survey?.Title || "Borang Kaji Selidik"}
           </h1>
-          <p className="text-slate-600 mt-2 text-sm md:text-base">{survey?.Description}</p>
+          <p className="text-slate-600 mt-2 text-sm md:text-base whitespace-pre-line leading-relaxed">
+            {survey?.Description}
+          </p>
 
           {/* PROGRESS BAR IKUT JUMLAH SOALAN DIJAWAB */}
           {questions.length > 0 && (
